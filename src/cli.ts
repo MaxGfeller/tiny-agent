@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   const skills = await discoverSkills(["~/.agents/skills", join(root, ".agents", "skills")]);
   for (const warning of skills.warnings) process.stderr.write(`[skill] ${warning}\n`);
 
-  const mcpPath = resolve(args.mcpPath ?? join(root, "mcp.json"));
+  const mcpPath = args.mcpPath ? resolve(root, args.mcpPath) : join(root, "mcp.json");
   const mcp = await connectMcpServers(await loadMcpConfig(mcpPath), { root, configPath: mcpPath });
   const localTools = createLocalTools();
   const sharedContext = [
