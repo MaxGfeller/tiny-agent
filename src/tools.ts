@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import {
-  lstat,
   readFile,
   readdir,
   realpath,
@@ -85,9 +84,10 @@ const writeFileTool: AgentTool = {
   },
   async execute(input, context) {
     const path = await resolveForWrite(context.root, requiredString(input, "path"));
+    const root = await realpath(context.root);
     const content = requiredString(input, "content", true);
     await writeFile(path, content, "utf8");
-    return `Wrote ${Buffer.byteLength(content)} bytes to ${relative(context.root, path)}`;
+    return `Wrote ${Buffer.byteLength(content)} bytes to ${relative(root, path)}`;
   },
 };
 
@@ -106,6 +106,7 @@ const editFileTool: AgentTool = {
   },
   async execute(input, context) {
     const path = await resolveForRead(context.root, requiredString(input, "path"));
+    const root = await realpath(context.root);
     const oldText = requiredString(input, "old_text");
     const newText = requiredString(input, "new_text", true);
     const content = await readFile(path, "utf8");
@@ -115,7 +116,7 @@ const editFileTool: AgentTool = {
       throw new Error("old_text is not unique; include more surrounding text");
     }
     await writeFile(path, `${content.slice(0, first)}${newText}${content.slice(first + oldText.length)}`, "utf8");
-    return `Edited ${relative(context.root, path)}`;
+    return `Edited ${relative(root, path)}`;
   },
 };
 

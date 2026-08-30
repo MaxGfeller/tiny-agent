@@ -34,6 +34,7 @@ test("stdio MCP tools are discovered, namespaced, and callable", async () => {
 
 test("Streamable HTTP MCP uses sessions and protocol headers", async () => {
   const seenProtocolHeaders: Array<string | undefined> = [];
+  let answeredPing = false;
   let deleted = false;
   const server = createServer(async (request, response) => {
     if (request.method === "DELETE") {
@@ -45,6 +46,11 @@ test("Streamable HTTP MCP uses sessions and protocol headers", async () => {
     for await (const chunk of request) chunks.push(chunk);
     const message = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     seenProtocolHeaders.push(request.headers["mcp-protocol-version"]);
+    if (message.id === "server-ping" && message.result) {
+      answeredPing = true;
+      response.writeHead(202).end();
+      return;
+    }
     if (message.method === "notifications/initialized") {
       response.writeHead(202).end();
       return;
@@ -71,8 +77,18 @@ test("Streamable HTTP MCP uses sessions and protocol headers", async () => {
     } else {
       result = { content: [{ type: "text", text: `http:${message.params.arguments.value}` }] };
     }
-    response.setHeader("Content-Type", "application/json");
-    response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+    if (message.method === "tools/call") {
+      response.setHeader("Content-Type", "text/event-stream");
+      response.end([
+        `data: ${JSON.stringify({ jsonrpc: "2.0", id: "server-ping", method: "ping" })}`,
+        "",
+        `data: ${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}`,
+        "",
+      ].join("\n"));
+    } else {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+    }
   });
   await new Promise<void>((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
   const address = server.address();
@@ -90,6 +106,7 @@ test("Streamable HTTP MCP uses sessions and protocol headers", async () => {
 
     assert.equal(seenProtocolHeaders[0], undefined);
     assert.equal(seenProtocolHeaders[1], "2025-11-25");
+    assert.equal(answeredPing, true);
     assert.equal(deleted, true);
   } finally {
     await new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise()));

@@ -16,6 +16,13 @@ type JsonRpcResponse = {
   error?: { code: number; message: string; data?: unknown };
 };
 
+type JsonRpcServerRequest = {
+  jsonrpc: "2.0";
+  id: JsonRpcId;
+  method: string;
+  params?: unknown;
+};
+
 type McpToolDefinition = {
   name: string;
   description?: string;
@@ -83,23 +90,22 @@ export async function connectMcpServers(
       await connection.initialize();
       connections.push(connection);
     }
+    const tools = (await Promise.all(connections.map((connection) => connection.agentTools()))).flat();
+    const names = new Set<string>();
+    for (const tool of tools) {
+      if (names.has(tool.name)) throw new Error(`Duplicate MCP tool name after namespacing: ${tool.name}`);
+      names.add(tool.name);
+    }
+    return {
+      tools,
+      async close() {
+        await Promise.allSettled(connections.map((connection) => connection.close()));
+      },
+    };
   } catch (error) {
     await Promise.allSettled(connections.map((connection) => connection.close()));
     throw error;
   }
-
-  const tools = (await Promise.all(connections.map((connection) => connection.agentTools()))).flat();
-  const names = new Set<string>();
-  for (const tool of tools) {
-    if (names.has(tool.name)) throw new Error(`Duplicate MCP tool name after namespacing: ${tool.name}`);
-    names.add(tool.name);
-  }
-  return {
-    tools,
-    async close() {
-      await Promise.allSettled(connections.map((connection) => connection.close()));
-    },
-  };
 }
 
 class McpConnection {
@@ -200,14 +206,17 @@ class StdioTransport implements RpcTransport {
   }
 
   private receive(line: string): void {
-    let message: JsonRpcResponse;
+    let message: JsonRpcResponse | JsonRpcServerRequest;
     try {
       message = JSON.parse(line) as JsonRpcResponse;
     } catch {
       this.failAll(new Error(`MCP server returned invalid JSON on stdout: ${line.slice(0, 200)}`));
       return;
     }
-    if (!("id" in message)) return;
+    if ("method" in message) {
+      this.write(serverRequestReply(message));
+      return;
+    }
     const pending = this.pending.get(message.id);
     if (!pending) return;
     clearTimeout(pending.timer);
@@ -229,6 +238,7 @@ class HttpTransport implements RpcTransport {
   private readonly headers: Record<string, string>;
   private nextId = 1;
   private protocolInitialized = false;
+  private protocolVersion = MCP_PROTOCOL_VERSION;
   private sessionId?: string;
   private readonly url: string;
 
@@ -245,9 +255,17 @@ class HttpTransport implements RpcTransport {
       this.sessionId = response.headers.get("mcp-session-id") ?? undefined;
       this.protocolInitialized = true;
     }
-    const message = response.message;
-    if (!message || message.id !== id) throw new Error(`MCP HTTP response did not include request id ${id}`);
+    for (const item of response.messages) {
+      if ("method" in item && "id" in item) {
+        await this.post(serverRequestReply(item as JsonRpcServerRequest));
+      }
+    }
+    const message = response.messages.find((item) => "id" in item && item.id === id) as JsonRpcResponse | undefined;
+    if (!message) throw new Error(`MCP HTTP response did not include request id ${id}`);
     if (message.error) throw rpcError(message.error);
+    if (method === "initialize" && typeof (message.result as { protocolVersion?: unknown })?.protocolVersion === "string") {
+      this.protocolVersion = (message.result as { protocolVersion: string }).protocolVersion;
+    }
     return message.result;
   }
 
@@ -260,7 +278,10 @@ class HttpTransport implements RpcTransport {
     await fetch(this.url, { method: "DELETE", headers: this.requestHeaders() }).catch(() => undefined);
   }
 
-  private async post(message: unknown): Promise<{ message?: JsonRpcResponse; headers: Headers }> {
+  private async post(message: unknown): Promise<{
+    messages: Array<JsonRpcResponse | Record<string, unknown>>;
+    headers: Headers;
+  }> {
     const response = await fetch(this.url, {
       method: "POST",
       headers: this.requestHeaders(),
@@ -268,13 +289,13 @@ class HttpTransport implements RpcTransport {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) throw new Error(`MCP HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
-    if (response.status === 202) return { headers: response.headers };
+    if (response.status === 202) return { messages: [], headers: response.headers };
     const body = await response.text();
     const contentType = response.headers.get("content-type") ?? "";
     const parsed = contentType.includes("text/event-stream")
       ? parseSseMessages(body)
       : parseJsonRpcMessages(body);
-    return { message: parsed.find((item) => "id" in item) as JsonRpcResponse | undefined, headers: response.headers };
+    return { messages: parsed, headers: response.headers };
   }
 
   private requestHeaders(): Record<string, string> {
@@ -283,7 +304,7 @@ class HttpTransport implements RpcTransport {
       Accept: "application/json, text/event-stream",
       "Content-Type": "application/json",
       ...(this.sessionId ? { "MCP-Session-Id": this.sessionId } : {}),
-      ...(this.protocolInitialized ? { "MCP-Protocol-Version": MCP_PROTOCOL_VERSION } : {}),
+      ...(this.protocolInitialized ? { "MCP-Protocol-Version": this.protocolVersion } : {}),
     };
   }
 }
@@ -380,6 +401,16 @@ function parseSseMessages(body: string): Array<JsonRpcResponse | Record<string, 
 
 function rpcError(error: { code: number; message: string; data?: unknown }): Error {
   return new Error(`MCP ${error.code}: ${error.message}${error.data === undefined ? "" : ` (${JSON.stringify(error.data)})`}`);
+}
+
+function serverRequestReply(request: JsonRpcServerRequest): JsonRpcResponse {
+  return request.method === "ping"
+    ? { jsonrpc: "2.0", id: request.id, result: {} }
+    : {
+        jsonrpc: "2.0",
+        id: request.id,
+        error: { code: -32601, message: `Client method not supported: ${request.method}` },
+      };
 }
 
 function resolveInside(root: string, path: string): string {
