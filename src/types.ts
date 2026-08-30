@@ -28,6 +28,7 @@ export type ConversationItem = UserMessage | FunctionCallOutput | ResponseOutput
 
 export type StoredItem = {
   item: ConversationItem;
+  batch?: number;
   compacted?: true;
 };
 
@@ -68,4 +69,3 @@ export type ModelClient = {
     signal?: AbortSignal;
   }) => Promise<ModelResult>;
 };
-
