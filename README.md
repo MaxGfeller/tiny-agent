@@ -1,6 +1,6 @@
 # tiny-agent
 
-tiny-agent is a dependency-free TypeScript coding agent built to accompany the “Build your own Claude Code” talk. It uses the OpenAI Responses API directly and keeps the implementation small enough to read on stage.
+tiny-agent is a dependency-free TypeScript coding agent built to accompany the [“Build your own Claude Code” talk](https://maxgfeller.com/build-your-own-claude-code/). It uses the OpenAI Responses API directly and keeps the implementation small enough to read on stage.
 
 It includes a persistent conversation and tool loop, contained filesystem tools, shell execution, rolling context compaction, isolated subagents, scoped `AGENTS.md` instructions, stdio and Streamable HTTP MCP clients, and progressively disclosed Agent Skills.
 
@@ -33,4 +33,3 @@ The default model is `gpt-5.4-mini`. Override it with `OPENAI_MODEL` or `--model
 ```bash
 npm test
 ```
-
